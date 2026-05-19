@@ -67,7 +67,10 @@ def create_train_state(model, rng, optimizer):
 def save_checkpoint(state, step: int, tag: str = None):
     label = tag if tag else f'step_{step:05d}'
     local  = f'/content/checkpoints/{label}'
-    remote = f'/drive/MyDrive/sql-lm-data/checkpoints/{label}'
+    # Drive can be mounted at either path depending on how the session started
+    drive_base = next((p for p in ['/content/drive/MyDrive', '/drive/MyDrive']
+                       if os.path.exists(p)), None)
+    remote = f'{drive_base}/sql-lm-data/checkpoints/{label}' if drive_base else None
 
     # Strip apply_fn and tx — they aren't pytree-serializable.
     payload = {
@@ -79,8 +82,7 @@ def save_checkpoint(state, step: int, tag: str = None):
     ckptr = ocp.PyTreeCheckpointer()
     ckptr.save(local, payload)
 
-    # Copy to Drive immediately if in Colab environment
-    if os.path.exists('/drive/MyDrive'):
+    if remote:
         try:
             os.makedirs(os.path.dirname(remote), exist_ok=True)
             if os.path.exists(remote):
@@ -90,7 +92,7 @@ def save_checkpoint(state, step: int, tag: str = None):
         except Exception as e:
             print(f"Failed to copy checkpoint to Drive: {e}")
     else:
-        print(f"Checkpoint saved locally: {local}")
+        print(f"Checkpoint saved locally only (Drive not mounted): {local}")
 
 def load_checkpoint(path: str, template_state):
     """Restore params/opt_state/step into the structure of `template_state`."""
@@ -156,11 +158,12 @@ def train():
     # Resume from checkpoint logic
     start_step = 0
     checkpoint_dir = '/content/checkpoints'
-    drive_checkpoint_dir = '/drive/MyDrive/sql-lm-data/checkpoints'
-    
-    # Check Drive first if available
+    drive_base     = next((p for p in ['/content/drive/MyDrive', '/drive/MyDrive']
+                           if os.path.exists(p)), None)
+    drive_checkpoint_dir = f'{drive_base}/sql-lm-data/checkpoints' if drive_base else None
+
     search_dirs = []
-    if os.path.exists(drive_checkpoint_dir):
+    if drive_checkpoint_dir and os.path.exists(drive_checkpoint_dir):
         search_dirs.append(drive_checkpoint_dir)
     if os.path.exists(checkpoint_dir):
         search_dirs.append(checkpoint_dir)
@@ -182,17 +185,16 @@ def train():
 
     # Main Loop
     losses = []
-    local_metrics  = '/content/metrics.jsonl'
-    drive_metrics  = '/drive/MyDrive/sql-lm-data/metrics.jsonl'
+    local_metrics = '/content/metrics.jsonl'
+    drive_base    = next((p for p in ['/content/drive/MyDrive', '/drive/MyDrive']
+                          if os.path.exists(p)), None)
+    drive_metrics = f'{drive_base}/sql-lm-data/metrics.jsonl' if drive_base else None
 
     def log_metric(record: dict):
         line = json.dumps(record) + '\n'
-        # Always write locally — readable in this notebook with no sync lag.
         with open(local_metrics, 'a') as f:
             f.write(line)
-        # Also mirror to Drive so it survives session death and is readable
-        # from other notebooks (may have a short sync lag in a second notebook).
-        if os.path.exists('/drive/MyDrive'):
+        if drive_metrics:
             with open(drive_metrics, 'a') as f:
                 f.write(line)
 
