@@ -23,6 +23,27 @@ Target environment:
 
 ---
 
+## Fine-Tuning Results (2026-05-19)
+
+**Checkpoint:** `ft_step_02500` (best val loss = 0.1358, on Drive)
+
+**Benchmark: gretelai/synthetic_text_to_sql test split** — 5,851 examples (clean holdout; trained on `train` only)
+
+| Metric | Count | % |
+|--------|-------|---|
+| Exact Match (EM) | 1,204 / 5,851 | 20.6% |
+| Execution Accuracy (EX) | 2,496 / 5,851 | 42.7% |
+| Exec errors (invalid SQL) | 1,740 / 5,851 | 29.7% |
+
+When the model generates valid SQL (70.3% of examples), it produces the correct result set **60.7%** of the time. The bottleneck is syntactic correctness, not semantic understanding.
+
+**Improvement levers for a second fine-tuning pass:**
+- Add dropout (0.1–0.15) to reduce exec error rate
+- Upsample `sql_create_context` (clean, short queries) for syntactic reinforcement
+- Longer run or lower final LR floor
+
+---
+
 ## Critical Correction From CORPUS.md Section 9
 
 CORPUS.md says "PyTorch Dataset". **This is wrong for our stack.**
