@@ -123,6 +123,7 @@ def load_pretrain_params(checkpoint_path: str, template_params):
     restored = ckptr.restore(
         checkpoint_path,
         item={'params': template_params, 'step': 0},
+        partial_restore=True,
     )
     return restored['params']
 
