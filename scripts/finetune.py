@@ -151,6 +151,9 @@ def save_ft_checkpoint(state, step: int, tag: str = None):
         'step':      int(state.step),
     }
     ckptr = ocp.PyTreeCheckpointer()
+    if os.path.exists(local):
+        import shutil as _shutil
+        _shutil.rmtree(local)
     ckptr.save(local, payload)
 
     if remote:
