@@ -117,13 +117,23 @@ def _drive_base():
 
 
 def load_pretrain_params(checkpoint_path: str, template_params):
-    """Restore only the params pytree from a pretraining checkpoint."""
+    """Restore only the params pytree from a pretraining checkpoint.
+
+    Orbax requires the item template to match the saved structure exactly.
+    We satisfy that by providing a zero-initialised opt_state with the same
+    shape tree; we discard it after loading and only return params.
+    """
     ckptr = ocp.PyTreeCheckpointer()
-    # Pass only params + step as the template; Orbax ignores the saved opt_state.
+    # Build an opt_state template whose *structure* matches the saved checkpoint.
+    # Shape/values don't matter — Orbax only uses the template for dtype/shape info.
+    opt_state_template = create_ft_optimizer(create_ft_schedule()).init(template_params)
     restored = ckptr.restore(
         checkpoint_path,
-        item={'params': template_params, 'step': 0},
-        partial_restore=True,
+        item={
+            'params':    template_params,
+            'opt_state': opt_state_template,
+            'step':      0,
+        },
     )
     return restored['params']
 
