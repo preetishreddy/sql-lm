@@ -88,52 +88,62 @@ def beam_search(params, model, tokenizer, prompt: str,
     """
     Beam search decoding. Batches all beams into a single forward pass per step.
 
-    length_penalty: score /= (gen_len ** length_penalty). 0 = no normalisation,
-                    0.6 = mild (good default for SQL), 1.0 = full length norm.
+    Initialises from a single beam so step 1 fans out to k diverse hypotheses.
+    Subsequent steps expand each of the k beams to k candidates and keep the top k.
+
+    length_penalty: score /= (gen_len ** length_penalty).
+                    0 = no normalisation, 0.6 = mild (default), 1.0 = full.
     """
     prompt_ids = [BOS_ID] + tokenizer.encode(prompt).ids
     n_prompt   = len(prompt_ids)
 
-    # (token_ids, cumulative_log_prob, is_finished)
-    beam_ids    = [list(prompt_ids) for _ in range(num_beams)]
-    beam_scores = [0.0] * num_beams
-    beam_done   = [False] * num_beams
+    def _log_softmax(logits_1d):
+        shifted = logits_1d - logits_1d.max()
+        return shifted - np.log(np.sum(np.exp(shifted)))
 
-    for _ in range(max_new_tokens):
+    # --- Step 1: single forward pass → fan out to num_beams diverse beams ---
+    window  = prompt_ids[-CONTEXT_LENGTH:]
+    seq_len = len(window)
+    padded  = window + [PAD_ID] * (CONTEXT_LENGTH - seq_len)
+    logits  = _forward(params, model, jnp.array([padded], dtype=jnp.int32))
+    lp      = _log_softmax(np.array(logits[0, seq_len - 1, :], dtype=np.float32))
+    top_k   = np.argsort(-lp)[:num_beams]
+
+    beam_ids    = [list(prompt_ids) + [int(t)] for t in top_k]
+    beam_scores = [float(lp[t]) for t in top_k]
+    beam_done   = [int(t) == EOS_ID for t in top_k]
+
+    # --- Steps 2+: batched expansion ---
+    for _ in range(max_new_tokens - 1):
         if all(beam_done):
             break
 
-        # Batched forward pass — all k beams in one call
-        seq_len = len(beam_ids[0])          # all beams are same length
+        seq_len = len(beam_ids[0])
         pos     = min(seq_len, CONTEXT_LENGTH) - 1
         windows = [ids[-CONTEXT_LENGTH:] for ids in beam_ids]
         padded  = np.array(
             [w + [PAD_ID] * (CONTEXT_LENGTH - len(w)) for w in windows],
-            dtype=np.int32)                 # [k, CONTEXT_LENGTH]
+            dtype=np.int32)
 
-        logits     = _forward(params, model, jnp.array(padded))   # [k, T, vocab]
-        nxt_logits = np.array(logits[:, pos, :], dtype=np.float32) # [k, vocab]
+        logits     = _forward(params, model, jnp.array(padded))
+        nxt_logits = np.array(logits[:, pos, :], dtype=np.float32)
+        shifted    = nxt_logits - nxt_logits.max(axis=1, keepdims=True)
+        log_probs  = shifted - np.log(np.sum(np.exp(shifted), axis=1, keepdims=True))
 
-        # Numerically stable log-softmax per beam
-        shifted   = nxt_logits - nxt_logits.max(axis=1, keepdims=True)
-        log_probs = shifted - np.log(np.sum(np.exp(shifted), axis=1, keepdims=True))
-
-        # Expand candidates
         candidates = []
         for i in range(num_beams):
             if beam_done[i]:
                 candidates.append((beam_ids[i], beam_scores[i], True))
                 continue
             for tok_id in np.argsort(-log_probs[i])[:num_beams]:
-                new_ids   = beam_ids[i] + [int(tok_id)]
-                new_score = beam_scores[i] + float(log_probs[i, tok_id])
-                is_done   = (int(tok_id) == EOS_ID)
-                candidates.append((new_ids, new_score, is_done))
+                candidates.append((
+                    beam_ids[i] + [int(tok_id)],
+                    beam_scores[i] + float(log_probs[i, tok_id]),
+                    int(tok_id) == EOS_ID,
+                ))
 
-        # Length-normalised ranking
         def _rank(c):
-            gen_len = max(1, len(c[0]) - n_prompt)
-            return c[1] / (gen_len ** length_penalty)
+            return c[1] / (max(1, len(c[0]) - n_prompt) ** length_penalty)
 
         candidates.sort(key=_rank, reverse=True)
         top = candidates[:num_beams]
