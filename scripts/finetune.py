@@ -34,7 +34,7 @@ from scripts.model import SQLTransformer
 # -----------------------------------------------------------------------
 # Hyperparameters
 # -----------------------------------------------------------------------
-FT_BATCH_SIZE       = 32
+FT_BATCH_SIZE       = 16
 FT_TOTAL_STEPS      = 5_000
 FT_WARMUP_STEPS     = 100
 FT_PEAK_LR          = 1e-5
@@ -217,6 +217,7 @@ def finetune(
     data_dir:      str = '/content/data/finetune',
     pretrain_ckpt: str = None,   # auto-detected if None
     output_dir:    str = '/content/checkpoints',
+    metrics_tag:   str = 'ft_metrics',  # Drive filename stem, e.g. 'ft_metrics_v4'
 ):
     print(f"JAX devices: {jax.devices()}")
 
@@ -279,9 +280,9 @@ def finetune(
 
     # --- Metrics logging ---
     os.makedirs(output_dir, exist_ok=True)
-    local_metrics = '/content/ft_metrics.jsonl'
+    local_metrics = f'/content/{metrics_tag}.jsonl'
     drive         = _drive_base()
-    drive_metrics = f'{drive}/sql-lm-data/ft_metrics.jsonl' if drive else None
+    drive_metrics = f'{drive}/sql-lm-data/{metrics_tag}.jsonl' if drive else None
 
     def log_metric(record: dict):
         line = json.dumps(record) + '\n'

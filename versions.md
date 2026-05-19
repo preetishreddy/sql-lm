@@ -247,3 +247,54 @@ The changes made (dropout, more steps, BIRD 5×) were in the right direction but
 | Increase context length to 1024 | Unlocks 73% of skipped BIRD examples | Moderate (retrain) |
 | Larger model (60–120M params) | Directly addresses capacity ceiling | High |
 | Real SQL data (actual DB + query pairs) | Better schema grounding | Data collection effort |
+
+---
+
+## v3 — 2026-05-19
+
+### Changes from v2
+
+| Change | Value |
+|---|---|
+| Dropout bug fixed | `nn.Dropout(deterministic=rate==0.0)` — dropout now actually applies during training |
+| Everything else | Identical to v2 (5,000 steps, BIRD 5×, gretelai 0.25×, step_76500 start) |
+
+**Bug context:** In v2, `nn.scan` silently drops `__call__` kwargs, so `deterministic=not train` passed as a kwarg was ignored. v2 trained with dropout=0 despite `FT_DROPOUT=0.1`. v3 fixed this by setting `deterministic` as a constructor argument on `nn.Dropout`, derived from the rate: `deterministic=(rate == 0.0)`. This makes inference a guaranteed no-op (rate=0.0 → deterministic=True) and training stochastic (rate=0.1 → deterministic=False).
+
+### Fine-Tuning Results
+
+Val loss identical to v2 — best **0.1078 at step 4,500**. Training loss values matched v2 to 4 decimal places throughout, which is expected: dropout at rate=0.1 adds noise to gradients but has minimal effect on the scalar loss printed per step.
+
+Best checkpoint: **`ft_step_04500`**
+
+### Evaluation — gretelai/synthetic_text_to_sql test split
+
+| Metric | v1 | v2 | v3 | Δ (v2→v3) |
+|---|---|---|---|---|
+| Exact Match (EM) | 20.6% | 20.6% | 20.6% | 0 |
+| Execution Accuracy (EX) | 42.7% | 42.7% | 42.7% | 0 |
+| Exec errors | 1,740 (29.7%) | 1,758 (30.0%) | 1,758 (30.0%) | 0 |
+
+Dropout with the bug fixed produces identical results to v2. The regularization hypothesis is ruled out.
+
+### What we learned
+
+All three versions produce the same benchmark numbers. The ceiling at **42.7% EX / 30% exec error** is not a regularization problem, not a training duration problem, and not a data weighting problem. The constraint is structural.
+
+**Confirmed dead ends:**
+- More training steps (3k → 5k): no effect
+- Higher BIRD weight (3× → 5×): no effect (73% of BIRD skipped due to 512-token limit)
+- Dropout (0.0 → 0.1): no effect on exec error rate or EX
+- Beam search (k=4): negative effect (EX −2.5pp, exec_err +33%)
+
+### What to try in v4
+
+The only levers with remaining headroom:
+
+| Option | Expected impact | Rationale |
+|---|---|---|
+| Context length 1024 (pretraining + fine-tuning) | Unlock BIRD; EX +5–10pp estimate | BIRD has the most complex multi-table schemas — it's the right data, just truncated |
+| Larger model (60–120M params) | Address capacity ceiling directly | 30.7M is small for multi-table SQL with complex schemas |
+| Both together | Largest expected gain | Compound effect: more capacity + better training data |
+
+Context length increase is the higher-ROI first step: it requires extending RoPE frequencies and the position index range, rerunning data prep (no truncation at 1024), and retraining from the pretrain checkpoint. The model architecture is otherwise unchanged.

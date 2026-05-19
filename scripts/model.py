@@ -123,12 +123,13 @@ class TransformerBlock(nn.Module):
             self.hidden_dim, self.num_heads,
             self.head_dim, self.dtype)(
             RMSNorm(self.hidden_dim)(x), cos, sin, mask)
-        x = x + nn.Dropout(rate=self.dropout_rate)(attn_out)
+        no_drop = self.dropout_rate == 0.0
+        x = x + nn.Dropout(rate=self.dropout_rate, deterministic=no_drop)(attn_out)
 
         mlp_out = SwiGLU(
             self.hidden_dim, self.intermediate_dim,
             self.dtype)(RMSNorm(self.hidden_dim)(x))
-        x = x + nn.Dropout(rate=self.dropout_rate)(mlp_out)
+        x = x + nn.Dropout(rate=self.dropout_rate, deterministic=no_drop)(mlp_out)
 
         return x, None
 

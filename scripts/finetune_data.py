@@ -28,7 +28,7 @@ SCHEMA_OPEN,   SCHEMA_CLOSE   = 4, 7
 QUESTION_OPEN, QUESTION_CLOSE = 5, 8
 SQL_OPEN,      SQL_CLOSE      = 6, 9
 
-MAX_LEN = 512
+MAX_LEN = 1024
 
 # Upsampling weights — repeat each example this many times in the final mix.
 # Based on review: BIRD 3x, nstext2sql 2x (Spider stand-in), sql_create_context 1x,
