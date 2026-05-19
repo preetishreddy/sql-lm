@@ -1164,8 +1164,7 @@ zeros all along.
 
 ## Monitoring & Visualization
 
-The training loop appends one JSON line per log event to
-`/drive/MyDrive/sql-lm-data/metrics.jsonl`. Each line is either:
+The training loop writes one JSON line per log event. Each line is either:
 
 ```json
 {"step": 100,  "kind": "train", "loss": 8.21, "grad_norm": 1.34, "lr": 5e-5}
@@ -1173,72 +1172,73 @@ The training loop appends one JSON line per log event to
 {"step": 9999, "kind": "nan"}
 ```
 
-This file persists across sessions and grows by ~50 KB per Colab session.
-You can read and plot it from *any* notebook at any time — including while
-training is running in another tab.
+`log_metric` writes directly to `/drive/MyDrive/sql-lm-data/metrics.jsonl`
+(Drive must be mounted before `train()` is called, which Cell 1 handles).
+A local copy is also kept at `/content/metrics.jsonl` for same-notebook reads.
 
-### Plot cell (run in any Colab notebook)
+**Known issue:** A second Colab notebook mounting the same Drive may have a
+sync lag of 1-5 minutes before seeing a file that the training notebook just
+created. If the visualization notebook gets FileNotFoundError, wait a minute
+and retry, or read from the local copy in the training notebook itself.
+
+### Plot cell — run inside the TRAINING notebook (no sync lag)
+
+Add a new cell below the `train()` call and run it anytime:
 
 ```python
-import json
-import matplotlib.pyplot as plt
+import json, matplotlib.pyplot as plt
 from pathlib import Path
 
-path = '/drive/MyDrive/sql-lm-data/metrics.jsonl'
-records = [json.loads(l) for l in Path(path).read_text().splitlines()]
+# Prefer local copy (no sync lag); fall back to Drive
+for p in ['/content/metrics.jsonl', '/drive/MyDrive/sql-lm-data/metrics.jsonl']:
+    if Path(p).exists():
+        path = p
+        break
 
+records = [json.loads(l) for l in Path(path).read_text().splitlines() if l.strip()]
 train = [(r['step'], r['loss'], r['grad_norm']) for r in records if r['kind'] == 'train']
-val   = [(r['step'], r['loss'])                  for r in records if r['kind'] == 'val']
+val   = [(r['step'], r['loss'])                 for r in records if r['kind'] == 'val']
 nans  = [r['step'] for r in records if r['kind'] == 'nan']
 
-fig, ax = plt.subplots(3, 1, figsize=(11, 9), sharex=True)
+ts, tl, gn = zip(*train) if train else ([], [], [])
+fig, ax = plt.subplots(2, 1, figsize=(12, 6), sharex=True)
 
-# Loss
-ts, tl, _ = zip(*train) if train else ([], [], [])
-vs, vl    = zip(*val)   if val   else ([], [])
 ax[0].plot(ts, tl, label='train', linewidth=1)
-ax[0].plot(vs, vl, 'o-', label='val', markersize=5)
-ax[0].set_ylabel('loss'); ax[0].legend(); ax[0].grid(alpha=0.3)
-ax[0].set_yscale('log')
+if val:
+    vs, vl = zip(*val)
+    ax[0].plot(vs, vl, 'o-', label='val', markersize=4)
+ax[0].set_ylabel('loss'); ax[0].set_yscale('log'); ax[0].legend(); ax[0].grid(alpha=0.3)
+for s in nans: ax[0].axvline(s, color='red', alpha=0.4)
 
-# Gradient norm
-_, _, gn = zip(*train) if train else ([], [], [])
 ax[1].plot(ts, gn, color='orange', linewidth=1)
-ax[1].axhline(1.0, color='red', linestyle='--', label='GRAD_CLIP=1.0')
-ax[1].set_ylabel('grad norm'); ax[1].legend(); ax[1].grid(alpha=0.3)
+ax[1].axhline(1.0, color='red', linestyle='--', alpha=0.5, label='clip=1.0')
+ax[1].set_ylabel('grad norm'); ax[1].set_xlabel('step')
+ax[1].legend(); ax[1].grid(alpha=0.3)
 
-# Learning rate
-lrs = [r['lr'] for r in records if r['kind'] == 'train']
-ax[2].plot(ts, lrs, color='green', linewidth=1)
-ax[2].set_ylabel('lr'); ax[2].set_xlabel('step'); ax[2].grid(alpha=0.3)
-
-# Mark NaN events
-for s in nans:
-    for a in ax: a.axvline(s, color='red', alpha=0.4)
-
-plt.tight_layout()
-plt.show()
+plt.tight_layout(); plt.show()
+print(f"Steps: {ts[0]}–{ts[-1]} | loss: {tl[-1]:.4f}" +
+      (f" | val: {vl[-1]:.4f}" if val else ""))
 ```
 
 ### What to look for on the plots
 
 | Plot | Healthy | Trouble |
 |---|---|---|
-| **Train loss** | Smooth log-linear-ish decrease, ~9.4 → ~2.0 over 38k steps | Plateau, NaN spike, sudden jump up |
+| **Train loss** | Smooth log-linear-ish decrease, ~9.4 → ~2.0 over 76k steps | Plateau, NaN spike, sudden jump up |
 | **Val loss** | Tracks train loss within ~0.1-0.3, decreasing monotonically | Diverges from train loss → overfitting; flat → underfitting |
-| **Grad norm** | Mostly 0.1-1.0; brief spikes to 2-3 OK in first 1000 steps | Constantly clipped at 1.0 → LR too high; under 0.01 → vanishing grads |
-| **LR** | Linear warmup → flat plateau → cosine decay (the WSD shape) | If it's a different shape, the schedule wasn't wired right |
+| **Grad norm** | Mostly 0.1-1.0; brief spikes to 2-3 OK in first 2000 steps | Constantly clipped at 1.0 → LR too high; under 0.01 → vanishing grads |
 
-### Real-time monitoring during a session
+### Actual loss curve so far (session 1, 2026-05-18)
 
-The print logs in the running notebook show the same info per 100 steps.
-For live curves while training, open a **second notebook** on the same Drive
-(read-only is fine), run the plot cell, and re-execute it every few minutes —
-each refresh reads the up-to-date JSONL.
+```
+Step    100: 9.07  (expected ~9.4)
+Step    500: 5.64  val: 5.65
+Step   1000: 4.32  val: 3.99
+Step   1500: 3.55  val: 3.62
+Step   2000: warmup complete — LR at peak 5e-4
+```
 
-TensorBoard works too if you prefer (`pip install tensorboard`, write summaries
-in the train loop, `%tensorboard --logdir /drive/MyDrive/sql-lm-data/tb`) but adds
-dependencies and a writer object to manage. JSONL + matplotlib is enough.
+Ahead of the expected curve. Val tracks train closely — no overfitting.
 
 ---
 

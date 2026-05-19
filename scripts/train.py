@@ -182,11 +182,19 @@ def train():
 
     # Main Loop
     losses = []
-    metrics_path = '/drive/MyDrive/sql-lm-data/metrics.jsonl' if os.path.exists('/drive/MyDrive') else 'metrics.jsonl'
+    local_metrics  = '/content/metrics.jsonl'
+    drive_metrics  = '/drive/MyDrive/sql-lm-data/metrics.jsonl'
 
     def log_metric(record: dict):
-        with open(metrics_path, 'a') as f:
-            f.write(json.dumps(record) + '\n')
+        line = json.dumps(record) + '\n'
+        # Always write locally — readable in this notebook with no sync lag.
+        with open(local_metrics, 'a') as f:
+            f.write(line)
+        # Also mirror to Drive so it survives session death and is readable
+        # from other notebooks (may have a short sync lag in a second notebook).
+        if os.path.exists('/drive/MyDrive'):
+            with open(drive_metrics, 'a') as f:
+                f.write(line)
 
     print(f"Starting training from step {start_step}...")
 
