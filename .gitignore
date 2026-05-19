@@ -1,0 +1,10 @@
+data/
+__pycache__/
+*.pyc
+.venv/
+venv/
+.env
+*.token
+.DS_Store
+# Claude Code local settings — captures bash command rules, can contain inline tokens
+.claude/settings.local.json

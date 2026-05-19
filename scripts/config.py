@@ -1,0 +1,34 @@
+VOCAB_SIZE        = 12288
+HIDDEN_DIM        = 384
+NUM_LAYERS        = 16
+NUM_HEADS         = 6
+HEAD_DIM          = 64
+INTERMEDIATE_DIM  = 896
+CONTEXT_LENGTH    = 512
+ROPE_BASE         = 10_000
+
+BOS_ID = 0
+EOS_ID = 1
+PAD_ID = 2
+
+TOTAL_TOKENS_PER_EPOCH = 2_513_584_640
+NUM_EPOCHS             = 2
+TOTAL_TOKENS           = TOTAL_TOKENS_PER_EPOCH * NUM_EPOCHS
+
+BATCH_SIZE        = 128
+GRAD_ACCUM_STEPS  = 1
+TOTAL_STEPS       = 76_708
+STEPS_PER_EPOCH   = 38_354
+
+WARMUP_STEPS      = 2_000
+STABLE_STEPS      = 70_708
+DECAY_STEPS       = 4_000
+PEAK_LR           = 5e-4
+MIN_LR            = 5e-5
+WEIGHT_DECAY      = 0.1
+BETA1             = 0.9
+BETA2             = 0.95
+EPSILON           = 1e-8
+GRAD_CLIP         = 1.0
+EVAL_EVERY        = 500
+CHECKPOINT_EVERY  = 500

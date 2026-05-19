@@ -1,0 +1,6 @@
+tokenizers>=0.20
+datasets>=3.0
+huggingface_hub>=0.25
+transformers>=4.40  # only needed by scripts/extended_validation.py
+numpy>=1.26
+tqdm>=4.66
