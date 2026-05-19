@@ -1,22 +1,20 @@
 """Evaluate the fine-tuned SQL model on text-to-SQL benchmarks.
 
-Supports two benchmarks available on HuggingFace with full schema info:
+  evaluate_gretelai()  — gretelai/synthetic_text_to_sql test split
+                         Clean holdout: we trained on 'train' only.
+                         Has sql_context (CREATE TABLE), sql_prompt, sql.
 
-  evaluate_wikisql()  — WikiSQL test set (15,878 examples, single-table)
-  evaluate_spider()   — Spider dev set (1,034 examples, multi-table/join)
-                        Requires Spider tables.json passed separately since
-                        the HF Parquet version dropped schema fields.
+  evaluate_spider()    — Spider dev set (1,034 examples).
+                         Requires tables_json_path for execution accuracy.
 
 Usage (Colab):
-    from scripts.eval_sql import evaluate_wikisql, evaluate_spider
-    results = evaluate_wikisql(params, model, tok)          # recommended
-    results = evaluate_wikisql(params, model, tok, max_examples=200)  # quick
+    from scripts.eval_sql import evaluate_gretelai
+    results = evaluate_gretelai(params, model, tok, max_examples=200)
+    results = evaluate_gretelai(params, model, tok)  # full test set
 
-WikiSQL reference numbers (execution accuracy):
-    GPT-4:         ~91%
-    T5-3B FT:      ~87%
-    CodeT5 220M:   ~84%
-    Our model:     TBD  (30M params)
+Gretelai is synthetic but covers diverse schemas and query types.
+It's a valid held-out benchmark for our model since we never trained on
+this split.
 """
 
 import re
@@ -112,7 +110,104 @@ def _build_prompt(question: str, schema_sql: str) -> str:
 
 
 # -----------------------------------------------------------------------
-# WikiSQL schema builder
+# Gretelai evaluation
+# -----------------------------------------------------------------------
+
+def evaluate_gretelai(
+    params,
+    model,
+    tok,
+    split:          str   = 'test',
+    max_examples:   int   = None,
+    temperature:    float = 0.0,
+    max_new_tokens: int   = 150,
+    verbose:        bool  = True,
+) -> dict:
+    """
+    Evaluate on gretelai/synthetic_text_to_sql test split.
+    Fields: sql_context (CREATE TABLE...), sql_prompt (question), sql (gold).
+    We trained on 'train' only — 'test' is a clean holdout.
+    """
+    gen_kwargs = dict(
+        max_new_tokens=max_new_tokens,
+        temperature=max(temperature, 1e-6),
+        top_p=1.0 if temperature == 0.0 else 0.95,
+        seed=0,
+    )
+
+    print(f"Loading gretelai/synthetic_text_to_sql [{split}]...")
+    dataset = load_dataset('gretelai/synthetic_text_to_sql', split=split)
+    n = max_examples or len(dataset)
+    print(f"  {len(dataset):,} examples available, evaluating {n:,}.")
+
+    em_correct  = 0
+    ex_correct  = 0
+    exec_errors = 0
+    total       = 0
+    predictions = []
+
+    for i, ex in enumerate(dataset):
+        if max_examples and i >= max_examples:
+            break
+
+        schema_sql = ex['sql_context'] or ''
+        question   = ex['sql_prompt']  or ''
+        gold_sql   = ex['sql']         or ''
+
+        if not gold_sql:
+            continue
+
+        prompt   = _build_prompt(question, schema_sql)
+        pred_sql = generate(params, model, tok, prompt, **gen_kwargs).strip()
+
+        em    = _normalise(pred_sql) == _normalise(gold_sql)
+        ex_ok = _exec_match(pred_sql, gold_sql, schema_sql) if schema_sql else False
+        if schema_sql and not ex_ok and pred_sql:
+            _, err = _exec_sql(pred_sql, schema_sql)
+            if err:
+                exec_errors += 1
+
+        em_correct += int(em)
+        ex_correct += int(ex_ok)
+        total      += 1
+
+        predictions.append({
+            'question': question,
+            'gold':     gold_sql,
+            'pred':     pred_sql,
+            'em':       em,
+            'ex':       ex_ok,
+        })
+
+        if verbose and total % 100 == 0:
+            print(f"  {total:5,}/{n:,} | "
+                  f"EM: {em_correct/total:.1%} | "
+                  f"EX: {ex_correct/total:.1%} | "
+                  f"exec_err: {exec_errors}")
+
+    results = {
+        'n':           total,
+        'em':          em_correct / total if total else 0.0,
+        'ex':          ex_correct / total if total else 0.0,
+        'em_count':    em_correct,
+        'ex_count':    ex_correct,
+        'exec_errors': exec_errors,
+        'predictions': predictions,
+    }
+
+    if verbose:
+        print(f"\n{'='*52}")
+        print(f"gretelai synthetic_text_to_sql [{split}] — {total:,} examples")
+        print(f"  Exact Match (EM):        {results['em']:.1%}  ({em_correct:,}/{total:,})")
+        print(f"  Execution Accuracy (EX): {results['ex']:.1%}  ({ex_correct:,}/{total:,})")
+        print(f"  Exec errors (pred SQL):  {exec_errors:,}")
+        print(f"{'='*52}")
+
+    return results
+
+
+# -----------------------------------------------------------------------
+# WikiSQL schema builder  (kept for future use if loading script is fixed)
 # -----------------------------------------------------------------------
 
 def _wikisql_schema(table: dict) -> str:
