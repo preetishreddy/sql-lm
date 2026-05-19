@@ -118,17 +118,17 @@ class TransformerBlock(nn.Module):
     dropout_rate: float = 0.0
 
     @nn.compact
-    def __call__(self, x, cos, sin, mask, deterministic: bool = True):
+    def __call__(self, x, cos, sin, mask):
         attn_out = MultiHeadAttention(
             self.hidden_dim, self.num_heads,
             self.head_dim, self.dtype)(
             RMSNorm(self.hidden_dim)(x), cos, sin, mask)
-        x = x + nn.Dropout(rate=self.dropout_rate)(attn_out, deterministic=deterministic)
+        x = x + nn.Dropout(rate=self.dropout_rate)(attn_out)
 
         mlp_out = SwiGLU(
             self.hidden_dim, self.intermediate_dim,
             self.dtype)(RMSNorm(self.hidden_dim)(x))
-        x = x + nn.Dropout(rate=self.dropout_rate)(mlp_out, deterministic=deterministic)
+        x = x + nn.Dropout(rate=self.dropout_rate)(mlp_out)
 
         return x, None
 
@@ -166,6 +166,10 @@ class SQLTransformer(nn.Module):
         sin_scanned = jnp.broadcast_to(sin[None], (self.num_layers, *sin.shape))
         mask_scanned = jnp.broadcast_to(mask[None], (self.num_layers, *mask.shape))
 
+        # Set dropout_rate=0 during inference so nn.Dropout is a no-op without
+        # needing to pass `deterministic` through scan (scan ignores kwargs).
+        effective_dropout = self.dropout_rate if train else 0.0
+
         # 16 Transformer blocks via nn.scan with gradient checkpointing
         ScanBlock = nn.scan(
             RematTransformerBlock,
@@ -173,10 +177,9 @@ class SQLTransformer(nn.Module):
             split_rngs={'params': True, 'dropout': True},
             length=self.num_layers,
         )(self.hidden_dim, self.num_heads, self.head_dim,
-          self.intermediate_dim, self.dtype, self.dropout_rate)
+          self.intermediate_dim, self.dtype, effective_dropout)
 
-        x, _ = ScanBlock(x, cos_scanned, sin_scanned, mask_scanned,
-                         deterministic=not train)
+        x, _ = ScanBlock(x, cos_scanned, sin_scanned, mask_scanned)
 
         x = RMSNorm(self.hidden_dim)(x)
 
