@@ -34,10 +34,10 @@ MAX_LEN = 512
 # Based on review: BIRD 3x, nstext2sql 2x (Spider stand-in), sql_create_context 1x,
 # gretelai 0.5x (only the SQL targets, not the explanations).
 WEIGHTS = {
-    'bird':              3.0,
-    'nstext2sql':        2.0,
+    'bird':               5.0,   # v1: 3.0 — more complex multi-table schemas
+    'nstext2sql':         2.0,
     'sql_create_context': 1.0,
-    'gretelai':          0.5,
+    'gretelai':           0.25,  # v1: 0.5 — test set is gretelai; diminishing returns
 }
 
 VAL_FRACTION = 0.01  # 1% of each source held out
