@@ -190,3 +190,60 @@ Output truncation is not a factor: only 19 examples (0.3%) have gold SQL longer 
 | Longer fine-tuning run (5,000 steps) | Val loss was still improving at step 2,250 |
 
 Primary target: push the 128–256 token bucket (3,488 examples, 38.7% EX) — it's the most populated range and most tractable with better training data.
+
+---
+
+## v2 — 2026-05-19
+
+### Changes from v1
+
+| Change | Value |
+|---|---|
+| Dropout | 0.1 (was 0.0) |
+| Fine-tuning steps | 5,000 (was 3,000) |
+| BIRD weight | 5× (was 3×) |
+| gretelai weight | 0.25× (was 0.5×) |
+| Starting checkpoint | step_76500 (same) |
+
+### Fine-Tuning Results
+
+| Step | Val loss |
+|---|---|
+| 500 | 0.1669 |
+| 1,000 | 0.1514 |
+| 1,700 | 0.1275 |
+| 2,500 | 0.1187 |
+| 3,500 | 0.1097 |
+| 4,200 | 0.1080 |
+| **4,500** | **0.1078 ← best** |
+| 5,000 (final) | 0.1150 |
+
+Best checkpoint: **`ft_step_04500`** (val loss 0.1078, vs v1's 0.1355 — 20% lower).
+
+### Evaluation — gretelai/synthetic_text_to_sql test split
+
+| Metric | v1 | v2 | Δ |
+|---|---|---|---|
+| Exact Match (EM) | 20.6% | 20.6% | 0 |
+| Execution Accuracy (EX) | 42.7% | 42.7% | 0 |
+| Exec errors | 1,740 (29.7%) | 1,758 (30.0%) | +18 |
+
+**Val loss and EX are decoupled.** Despite a 20% drop in val loss, benchmark performance is flat. The model became better at predicting gold SQL tokens but did not generalise to new question-schema pairs any better. Dropout at 0.1 also failed to reduce the exec error rate.
+
+### What we learned
+
+The changes made (dropout, more steps, BIRD 5×) were in the right direction but insufficient to break the ceiling. The bottleneck is not hyperparameters.
+
+**Root causes of the ceiling:**
+- **Model capacity** — 30.7M params is small for multi-table SQL generation with complex schemas.
+- **BIRD barely contributing** — 73% of BIRD examples exceed 512 tokens and are skipped during data prep. At 5×, BIRD contributes only ~10k weighted examples out of 523k total (~1.9%).
+- **Training data ceiling** — the fine-tuning mix is largely synthetic; diminishing returns after v1.
+
+### What to try in v3
+
+| Option | Expected impact | Cost |
+|---|---|---|
+| Beam search (k=4) at inference | +2–4% EX, no retraining | Free |
+| Increase context length to 1024 | Unlocks 73% of skipped BIRD examples | Moderate (retrain) |
+| Larger model (60–120M params) | Directly addresses capacity ceiling | High |
+| Real SQL data (actual DB + query pairs) | Better schema grounding | Data collection effort |
