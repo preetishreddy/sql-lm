@@ -23,7 +23,7 @@ import sqlite3
 
 from datasets import load_dataset
 
-from scripts.generate import generate
+from scripts.generate import generate, beam_search
 
 
 # -----------------------------------------------------------------------
@@ -121,6 +121,7 @@ def evaluate_gretelai(
     max_examples:   int   = None,
     temperature:    float = 0.0,
     max_new_tokens: int   = 150,
+    beam_size:      int   = 1,
     verbose:        bool  = True,
 ) -> dict:
     """
@@ -157,8 +158,13 @@ def evaluate_gretelai(
         if not gold_sql:
             continue
 
-        prompt   = _build_prompt(question, schema_sql)
-        pred_sql = generate(params, model, tok, prompt, **gen_kwargs).strip()
+        prompt = _build_prompt(question, schema_sql)
+        if beam_size > 1:
+            pred_sql = beam_search(params, model, tok, prompt,
+                                   num_beams=beam_size,
+                                   max_new_tokens=max_new_tokens).strip()
+        else:
+            pred_sql = generate(params, model, tok, prompt, **gen_kwargs).strip()
 
         em    = _normalise(pred_sql) == _normalise(gold_sql)
         ex_ok = _exec_match(pred_sql, gold_sql, schema_sql) if schema_sql else False
