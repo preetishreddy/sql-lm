@@ -35,12 +35,13 @@ from scripts.model import SQLTransformer
 # Hyperparameters
 # -----------------------------------------------------------------------
 FT_BATCH_SIZE       = 32
-FT_TOTAL_STEPS      = 3_000
+FT_TOTAL_STEPS      = 5_000
 FT_WARMUP_STEPS     = 100
 FT_PEAK_LR          = 1e-5
 FT_MIN_LR           = 1e-6
 FT_WEIGHT_DECAY     = 0.01   # lighter than pretraining's 0.1
 FT_GRAD_CLIP        = 1.0
+FT_DROPOUT          = 0.1
 FT_EVAL_EVERY       = 250
 FT_CHECKPOINT_EVERY = 500
 
@@ -150,6 +151,9 @@ def save_ft_checkpoint(state, step: int, tag: str = None):
         'step':      int(state.step),
     }
     ckptr = ocp.PyTreeCheckpointer()
+    if os.path.exists(local):
+        import shutil as _shutil
+        _shutil.rmtree(local)
     ckptr.save(local, payload)
 
     if remote:
@@ -170,14 +174,15 @@ def save_ft_checkpoint(state, step: int, tag: str = None):
 # Train / eval steps
 # -----------------------------------------------------------------------
 @functools.partial(jax.jit, static_argnames=['model'])
-def train_step(state, tokens, mask, model):
+def train_step(state, tokens, mask, model, dropout_rng):
     def loss_fn(params):
-        logits      = model.apply({'params': params}, tokens)    # [B, T, V]
-        pred_logits = logits[:, :-1, :].astype(jnp.float32)     # [B, T-1, V]
-        targets     = tokens[:, 1:]                              # [B, T-1]
-        loss_mask   = mask[:, :-1]                               # [B, T-1]
+        logits      = model.apply({'params': params}, tokens, train=True,
+                                  rngs={'dropout': dropout_rng})  # [B, T, V]
+        pred_logits = logits[:, :-1, :].astype(jnp.float32)      # [B, T-1, V]
+        targets     = tokens[:, 1:]                               # [B, T-1]
+        loss_mask   = mask[:, :-1]                                # [B, T-1]
         per_token   = optax.softmax_cross_entropy_with_integer_labels(
-                          pred_logits, targets)                   # [B, T-1]
+                          pred_logits, targets)                    # [B, T-1]
         return (per_token * loss_mask).sum() / (loss_mask.sum() + 1e-9)
 
     loss, grads = jax.value_and_grad(loss_fn)(state.params)
@@ -230,6 +235,7 @@ def finetune(
         context_length=CONTEXT_LENGTH,
         rope_base=ROPE_BASE,
         dtype=jnp.bfloat16,
+        dropout_rate=FT_DROPOUT,
     )
 
     # Initialise once to get the params template structure for Orbax restore.
@@ -265,8 +271,10 @@ def finetune(
 
     # --- XLA warm-up compile ---
     print("Compiling train_step...")
+    rng = jax.random.PRNGKey(42)
     t0, m0 = train_loader.next_batch()
-    _ = train_step(state, jnp.array(t0), jnp.array(m0), model)
+    rng, dropout_rng = jax.random.split(rng)
+    _ = train_step(state, jnp.array(t0), jnp.array(m0), model, dropout_rng)
     print("Compilation complete.")
 
     # --- Metrics logging ---
@@ -290,8 +298,9 @@ def finetune(
 
     for step in range(1, FT_TOTAL_STEPS + 1):
         t, m = train_loader.next_batch()
+        rng, dropout_rng = jax.random.split(rng)
         state, loss, grad_norm = train_step(
-            state, jnp.array(t), jnp.array(m), model)
+            state, jnp.array(t), jnp.array(m), model, dropout_rng)
         losses.append(float(loss))
 
         if step % 100 == 0:
