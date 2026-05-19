@@ -49,24 +49,28 @@ def generate(params, model, tokenizer, prompt: str,
         next_logits = np.array(logits[0, seq_len - 1, :],
                                dtype=np.float32)              # last real position
 
-        if temperature != 1.0:
-            next_logits /= temperature
+        # Greedy decoding
+        if temperature == 0.0:
+            next_token = int(np.argmax(next_logits))
+        else:
+            if temperature != 1.0:
+                next_logits /= temperature
 
-        # Nucleus (top-p) sampling
-        probs = np.exp(next_logits - next_logits.max())
-        probs /= probs.sum()
+            # Nucleus (top-p) sampling
+            probs = np.exp(next_logits - next_logits.max())
+            probs /= probs.sum()
 
-        sorted_idx  = np.argsort(-probs)
-        sorted_probs = probs[sorted_idx]
-        cum_probs   = np.cumsum(sorted_probs)
-        cutoff      = int(np.searchsorted(cum_probs, top_p)) + 1
-        keep_idx    = sorted_idx[:cutoff]
+            sorted_idx   = np.argsort(-probs)
+            sorted_probs = probs[sorted_idx]
+            cum_probs    = np.cumsum(sorted_probs)
+            cutoff       = int(np.searchsorted(cum_probs, top_p)) + 1
+            keep_idx     = sorted_idx[:cutoff]
 
-        filtered = np.zeros_like(probs)
-        filtered[keep_idx] = probs[keep_idx]
-        filtered /= filtered.sum()
+            filtered = np.zeros_like(probs)
+            filtered[keep_idx] = probs[keep_idx]
+            filtered /= filtered.sum()
 
-        next_token = int(rng.choice(len(filtered), p=filtered))
+            next_token = int(rng.choice(len(filtered), p=filtered))
 
         if next_token == EOS_ID:
             break
