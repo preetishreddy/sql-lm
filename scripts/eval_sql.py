@@ -1,25 +1,27 @@
-"""Evaluate the fine-tuned SQL model on Spider dev set.
+"""Evaluate the fine-tuned SQL model on text-to-SQL benchmarks.
 
-The HF 'spider' Parquet version only contains question / query / db_id.
-Schema info lives in Spider's tables.json (one entry per database).
-Pass tables_json_path to enable execution accuracy; omit for EM-only mode.
+Supports two benchmarks available on HuggingFace with full schema info:
+
+  evaluate_wikisql()  — WikiSQL test set (15,878 examples, single-table)
+  evaluate_spider()   — Spider dev set (1,034 examples, multi-table/join)
+                        Requires Spider tables.json passed separately since
+                        the HF Parquet version dropped schema fields.
 
 Usage (Colab):
-    # Download Spider tables.json first (one-time):
-    # !wget -q https://raw.githubusercontent.com/taoyds/spider/master/tables.json \
-    #      -O /content/spider_tables.json
+    from scripts.eval_sql import evaluate_wikisql, evaluate_spider
+    results = evaluate_wikisql(params, model, tok)          # recommended
+    results = evaluate_wikisql(params, model, tok, max_examples=200)  # quick
 
-    from scripts.eval_sql import evaluate_spider
-    results = evaluate_spider(params, model, tok,
-                              tables_json_path='/content/spider_tables.json')
-
-Spider dev: 1,034 examples across 20 databases.
+WikiSQL reference numbers (execution accuracy):
+    GPT-4:         ~91%
+    T5-3B FT:      ~87%
+    CodeT5 220M:   ~84%
+    Our model:     TBD  (30M params)
 """
 
 import re
 import json
 import sqlite3
-from pathlib import Path
 
 from datasets import load_dataset
 
@@ -107,6 +109,120 @@ def _build_prompt(question: str, schema_sql: str) -> str:
     return (f'<schema>{schema_sql}</schema>'
             f'<question>{question}</question>'
             f'<sql>')
+
+
+# -----------------------------------------------------------------------
+# WikiSQL schema builder
+# -----------------------------------------------------------------------
+
+def _wikisql_schema(table: dict) -> str:
+    """
+    Build a CREATE TABLE statement from a WikiSQL table dict.
+    Fields: id (str), header (list of col names), types (list of types).
+    WikiSQL types are 'text' or 'real'.
+    """
+    tbl_name = re.sub(r'\W+', '_', table['id'])   # sanitise table name
+    type_map  = {'text': 'TEXT', 'real': 'REAL'}
+    col_defs  = ', '.join(
+        f'"{col}" {type_map.get(t, "TEXT")}'
+        for col, t in zip(table['header'], table['types'])
+    )
+    return f'CREATE TABLE "{tbl_name}" ({col_defs});'
+
+
+# -----------------------------------------------------------------------
+# WikiSQL evaluation
+# -----------------------------------------------------------------------
+
+def evaluate_wikisql(
+    params,
+    model,
+    tok,
+    split:          str   = 'test',
+    max_examples:   int   = None,
+    temperature:    float = 0.0,
+    max_new_tokens: int   = 150,
+    verbose:        bool  = True,
+) -> dict:
+    """
+    Evaluate on WikiSQL (HF dataset 'wikisql', test split = 15,878 examples).
+    Reports Exact Match and Execution Accuracy.
+    """
+    gen_kwargs = dict(
+        max_new_tokens=max_new_tokens,
+        temperature=max(temperature, 1e-6),
+        top_p=1.0 if temperature == 0.0 else 0.95,
+        seed=0,
+    )
+
+    print(f"Loading WikiSQL {split} set...")
+    dataset = load_dataset('wikisql', split=split)
+    total_available = len(dataset)
+    n = max_examples or total_available
+    print(f"  {total_available:,} examples available, evaluating {n:,}.")
+
+    em_correct  = 0
+    ex_correct  = 0
+    exec_errors = 0
+    total       = 0
+    predictions = []
+
+    for i, ex in enumerate(dataset):
+        if max_examples and i >= max_examples:
+            break
+
+        question   = ex['question']
+        gold_sql   = ex['sql']['human_readable']
+        schema_sql = _wikisql_schema(ex['table'])
+        tbl_name   = re.sub(r'\W+', '_', ex['table']['id'])
+
+        prompt   = _build_prompt(question, schema_sql)
+        pred_sql = generate(params, model, tok, prompt, **gen_kwargs).strip()
+
+        em    = _normalise(pred_sql) == _normalise(gold_sql)
+        ex_ok = _exec_match(pred_sql, gold_sql, schema_sql)
+        if not ex_ok and pred_sql:
+            _, err = _exec_sql(pred_sql, schema_sql)
+            if err:
+                exec_errors += 1
+
+        em_correct += int(em)
+        ex_correct += int(ex_ok)
+        total      += 1
+
+        predictions.append({
+            'question': question,
+            'gold':     gold_sql,
+            'pred':     pred_sql,
+            'em':       em,
+            'ex':       ex_ok,
+        })
+
+        if verbose and total % 100 == 0:
+            print(f"  {total:5,}/{n:,} | "
+                  f"EM: {em_correct/total:.1%} | "
+                  f"EX: {ex_correct/total:.1%} | "
+                  f"exec_err: {exec_errors}")
+
+    results = {
+        'n':           total,
+        'em':          em_correct / total if total else 0.0,
+        'ex':          ex_correct / total if total else 0.0,
+        'em_count':    em_correct,
+        'ex_count':    ex_correct,
+        'exec_errors': exec_errors,
+        'predictions': predictions,
+    }
+
+    if verbose:
+        print(f"\n{'='*52}")
+        print(f"WikiSQL {split} — {total:,} examples")
+        print(f"  Exact Match (EM):        {results['em']:.1%}  ({em_correct:,}/{total:,})")
+        print(f"  Execution Accuracy (EX): {results['ex']:.1%}  ({ex_correct:,}/{total:,})")
+        print(f"  Exec errors (pred SQL):  {exec_errors:,}")
+        print(f"{'='*52}")
+
+    return results
 
 
 # -----------------------------------------------------------------------
