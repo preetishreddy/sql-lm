@@ -41,7 +41,7 @@ def generate(params, model, tokenizer, prompt: str,
         window = ids[-CONTEXT_LENGTH:]
         seq_len = len(window)
 
-        # Right-pad to CONTEXT_LENGTH so _forward always gets a fixed shape [1, 512]
+        # Right-pad to CONTEXT_LENGTH so _forward always gets a fixed-shape input
         padded = window + [PAD_ID] * (CONTEXT_LENGTH - seq_len)
         x = jnp.array([padded], dtype=jnp.int32)
 
