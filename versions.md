@@ -298,3 +298,71 @@ The only levers with remaining headroom:
 | Both together | Largest expected gain | Compound effect: more capacity + better training data |
 
 Context length increase is the higher-ROI first step: it requires extending RoPE frequencies and the position index range, rerunning data prep (no truncation at 1024), and retraining from the pretrain checkpoint. The model architecture is otherwise unchanged.
+
+---
+
+## v4 — 2026-05-19
+
+### Changes from v3
+
+| Change | Value |
+|---|---|
+| Context length | 1024 (was 512) |
+| Fine-tune batch size | 16 (was 32 — O(T²) attention) |
+| Fine-tune dataset | Rebuilt at MAX_LEN=1024 |
+| Starting checkpoint | step_76500 (same — RoPE extrapolation, no continued pretraining) |
+
+Dataset grew from ~523k → **591,399 train + 6,123 val** examples, confirming more BIRD examples now pass the length filter.
+
+### Fine-Tuning Results
+
+| Step | Val loss |
+|---|---|
+| 500 | 0.3823 |
+| 1,000 | 0.2403 |
+| 1,700 | 0.2052 |
+| 2,500 | 0.1765 |
+| 3,200 | 0.1676 |
+| **4,000** | **0.1595 ← best** |
+| 5,000 (final) | 0.1622 |
+
+Best checkpoint: **`ft_step_04000`** (val loss 0.1595).
+
+**Note:** val loss is not comparable to v3's 0.1078. The v4 val set includes longer BIRD examples (up to 1024 tokens) that are harder to predict. A higher val loss does not mean worse model quality relative to v3.
+
+Grad norms were consistently above the 1.0 clip threshold (1.5–4.6) throughout training, especially early. This is expected when the model encounters positions 512–1023 it was never pretrained on.
+
+### Evaluation — gretelai/synthetic_text_to_sql test split
+
+Evaluated on `ft_step_04500` (val loss 0.1950) — not the best checkpoint.
+
+| Metric | v1 | v2 | v3 | v4 | Δ (v3→v4) |
+|---|---|---|---|---|---|
+| Exact Match (EM) | 20.6% | 20.6% | 20.6% | 20.1% | −0.5pp |
+| Execution Accuracy (EX) | 42.7% | 42.7% | 42.7% | 42.5% | −0.2pp |
+| Exec errors | 1,740 | 1,758 | 1,758 | 1,706 | −52 |
+
+### What we learned
+
+Longer context did not improve gretelai EX accuracy. The hypothesis was: more BIRD training data → better schema grounding → higher EX. The data volume increased (591k vs 523k examples), but the benchmark didn't move.
+
+**Root cause:** The gretelai test set has a median schema length of 99 tokens and median total sequence length of 163 tokens. Nearly all examples fit in 512 tokens. Increasing context to 1024 improves coverage of long BIRD schemas during training, but the test set never exercises that capability — it's the wrong benchmark for measuring the effect.
+
+**What did improve:** exec errors dropped by 52 (1,758 → 1,706), suggesting the BIRD data at longer context provided mild improvement in SQL syntax validity.
+
+**Confirmed dead ends (cumulative):**
+- More steps, more BIRD weight, dropout: no effect
+- Beam search: negative effect
+- Context length 512 → 1024: no effect on gretelai EX (wrong benchmark)
+
+### What to try in v5
+
+The gretelai benchmark is saturated at ~42–43% EX for this model. The right next step is either:
+
+| Option | Expected impact | Rationale |
+|---|---|---|
+| Larger model (60–120M params) | Break capacity ceiling | 30.7M is demonstrably insufficient for multi-table SQL complexity |
+| Evaluate on Spider/BIRD directly | Measure actual improvement from longer context | gretelai doesn't test complex multi-table SQL; Spider dev set does |
+| Both | True picture of capability + path to improvement | Spider eval is free; larger model requires new pretraining |
+
+Spider evaluation would tell us whether the longer-context BIRD training actually helped on the tasks it was designed for — without building a new model.
