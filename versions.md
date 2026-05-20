@@ -334,13 +334,15 @@ Grad norms were consistently above the 1.0 clip threshold (1.5–4.6) throughout
 
 ### Evaluation — gretelai/synthetic_text_to_sql test split
 
-Evaluated on `ft_step_04500` (val loss 0.1950) — not the best checkpoint.
+Evaluated on both `ft_step_04000` (best val) and `ft_step_04500`.
 
-| Metric | v1 | v2 | v3 | v4 | Δ (v3→v4) |
+| Metric | v1 | v2 | v3 | v4 (step 4000) | v4 (step 4500) |
 |---|---|---|---|---|---|
-| Exact Match (EM) | 20.6% | 20.6% | 20.6% | 20.1% | −0.5pp |
-| Execution Accuracy (EX) | 42.7% | 42.7% | 42.7% | 42.5% | −0.2pp |
-| Exec errors | 1,740 | 1,758 | 1,758 | 1,706 | −52 |
+| Exact Match (EM) | 20.6% | 20.6% | 20.6% | 20.0% | 20.1% |
+| Execution Accuracy (EX) | 42.7% | 42.7% | 42.7% | 42.4% | 42.5% |
+| Exec errors | 1,740 | 1,758 | 1,758 | 1,715 | 1,706 |
+
+The best val loss checkpoint (step 4000) does not outperform step 4500 on EX — further confirming val loss and EX are decoupled.
 
 ### What we learned
 
@@ -366,3 +368,8 @@ The gretelai benchmark is saturated at ~42–43% EX for this model. The right ne
 | Both | True picture of capability + path to improvement | Spider eval is free; larger model requires new pretraining |
 
 Spider evaluation would tell us whether the longer-context BIRD training actually helped on the tasks it was designed for — without building a new model.
+
+**Spider EM-only result (200 examples, no schema in prompt): 3.5%.**
+This is not a useful signal — running without `tables_json_path` sends an empty `<schema>` block, so the model generates SQL with no table or column names. Execution accuracy with actual schemas would be the meaningful metric, but requires the Spider tables.json download.
+
+**Conclusion:** The gretelai benchmark is saturated at 42–43% EX for a 30.7M parameter model. Every training variable has been exhausted. The only path to meaningful improvement is a larger model.
